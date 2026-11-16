@@ -63,6 +63,53 @@ func TestRoundtrip(t *testing.T) {
 	})
 }
 
+func TestEncryptBoundaries(t *testing.T) {
+	var kpEphemeral, kpSecret Keypair
+	kpEphemeral.Generate()
+	kpSecret.Generate()
+
+	Convey("Encrypt boundary handling", t, func() {
+		encrypter := kpEphemeral.Encrypter(kpSecret.Public)
+
+		Convey("plaintext resembling an envelope prefix only is still encrypted", func() {
+			ct, err := encrypter.Encrypt([]byte("EJ[not really an envelope"))
+			So(err, ShouldBeNil)
+			So(IsBoxedMessage(ct), ShouldBeTrue)
+		})
+
+		Convey("a valid boxed message is passed through unchanged", func() {
+			ct, err := encrypter.Encrypt([]byte("secret"))
+			So(err, ShouldBeNil)
+			again, err := encrypter.Encrypt(ct)
+			So(err, ShouldBeNil)
+			So(again, ShouldResemble, ct)
+		})
+
+		Convey("a malformed envelope fails closed instead of being re-wrapped", func() {
+			valid, err := encrypter.Encrypt([]byte("secret"))
+			So(err, ShouldBeNil)
+
+			Convey("with an unknown schema version", func() {
+				mangled := append([]byte("EJ[9:"), valid[4:]...)
+				_, err := encrypter.Encrypt(mangled)
+				So(err, ShouldNotBeNil)
+			})
+			Convey("with truncated base64", func() {
+				mangled := valid[:len(valid)-3]
+				mangled = append(mangled, ']')
+				_, err := encrypter.Encrypt(mangled)
+				So(err, ShouldNotBeNil)
+			})
+			Convey("with invalid base64", func() {
+				mangled := append([]byte(nil), valid...)
+				mangled[10] = '!'
+				_, err := encrypter.Encrypt(mangled)
+				So(err, ShouldNotBeNil)
+			})
+		})
+	})
+}
+
 func ExampleEncrypter_Encrypt() {
 	var ephemeral, recipient Keypair
 	if err := ephemeral.Generate(); err != nil {

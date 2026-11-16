@@ -33,7 +33,50 @@ func TestBoxedMessageRoundtripping(t *testing.T) {
 			So(IsBoxedMessage([]byte(wire)), ShouldBeTrue)
 			So(IsBoxedMessage([]byte("nope")), ShouldBeFalse)
 			So(IsBoxedMessage([]byte("EJ[]")), ShouldBeFalse)
-			So(IsBoxedMessage([]byte("EJ[1:12345678901234567890123456789012345678901234:12345678901234567890123456789012:a]")), ShouldBeTrue) // we could be stricter than this.
+			So(IsBoxedMessage([]byte("EJ[1:12345678901234567890123456789012345678901234:12345678901234567890123456789012:a]")), ShouldBeFalse)
+		})
+
+		Convey("Load fails closed", func() {
+			Convey("on unknown schema version", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("EJ[2:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC:AwMD]"))
+				So(err, ShouldWrap, ErrUnknownSchemaVersion)
+			})
+			Convey("on non-numeric schema version", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("EJ[x:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC:AwMD]"))
+				So(err, ShouldNotBeNil)
+			})
+			Convey("on truncated base64", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("EJ[1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE:AgICAgICAgICAgICAgICAgICAgICAgIC:AwMD]"))
+				So(err, ShouldNotBeNil)
+			})
+			Convey("on invalid base64", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("EJ[1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ!=:AgICAgICAgICAgICAgICAgICAgICAgIC:AwMD]"))
+				So(err, ShouldNotBeNil)
+			})
+			Convey("on a wrong-length public key", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("EJ[1:AQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC:AwMD]"))
+				So(err, ShouldNotBeNil)
+			})
+			Convey("on a missing field", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("EJ[1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC]"))
+				So(err, ShouldNotBeNil)
+			})
+			Convey("on an empty box", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("EJ[1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC:]"))
+				So(err, ShouldNotBeNil)
+			})
+			Convey("on a missing envelope", func() {
+				bm := boxedMessage{}
+				err := bm.Load([]byte("1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC:AwMD"))
+				So(err, ShouldNotBeNil)
+			})
 		})
 	})
 }

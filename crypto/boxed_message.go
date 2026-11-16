@@ -1,13 +1,28 @@
 package crypto
 
 import (
+	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
+	"strings"
 )
 
-var messageParser = regexp.MustCompile("\\AEJ\\[(\\d):([A-Za-z0-9+=/]{44}):([A-Za-z0-9+=/]{32}):(.+)\\]\\z")
+// SchemaVersion is the only boxed-message schema version this implementation
+// knows how to read and write.
+const SchemaVersion = 1
+
+// ErrUnknownSchemaVersion indicates that a boxed message declares a schema
+// version this implementation does not understand.
+var ErrUnknownSchemaVersion = errors.New("unknown schema version")
+
+// envelopePrefix and envelopeSuffix delimit the wire format of a boxed
+// message.
+const (
+	envelopePrefix = "EJ["
+	envelopeSuffix = "]"
+)
 
 // boxedMessage dumps and loads the wire format for encrypted messages. The
 // schema is fairly simple:
@@ -28,11 +43,21 @@ type boxedMessage struct {
 	Box             []byte
 }
 
-// IsBoxedMessage tests whether a value is formatted using the boxedMessage
-// format. This can be used to determine whether a string value requires
-// encryption or is already encrypted.
+// LooksLikeBoxedMessage reports whether data has the outer EJ[...] envelope
+// shape, regardless of whether its contents are valid. Anything matching
+// this shape must parse strictly via Load; callers must not treat a
+// malformed envelope as plaintext.
+func LooksLikeBoxedMessage(data []byte) bool {
+	return bytes.HasPrefix(data, []byte(envelopePrefix)) &&
+		bytes.HasSuffix(data, []byte(envelopeSuffix))
+}
+
+// IsBoxedMessage tests whether a value is a well-formed boxedMessage. This
+// can be used to determine whether a string value requires encryption or is
+// already encrypted.
 func IsBoxedMessage(data []byte) bool {
-	return messageParser.Find(data) != nil
+	var bm boxedMessage
+	return bm.Load(data) == nil
 }
 
 // Dump dumps to the wire format
@@ -48,57 +73,59 @@ func (b *boxedMessage) Dump() []byte {
 
 // Load restores from the wire format.
 func (b *boxedMessage) Load(from []byte) error {
-	var ssver, spub, snonce, sbox string
-	var err error
-
-	allMatches := messageParser.FindAllStringSubmatch(string(from), -1) // -> [][][]byte
-	if len(allMatches) != 1 {
-		return fmt.Errorf("invalid message format")
+	if !LooksLikeBoxedMessage(from) {
+		return fmt.Errorf("invalid message format: missing %s...%s envelope", envelopePrefix, envelopeSuffix)
 	}
-	matches := allMatches[0]
-	if len(matches) != 5 {
-		return fmt.Errorf("invalid message format")
+	body := string(from[len(envelopePrefix) : len(from)-len(envelopeSuffix)])
+	// The base64 alphabet contains no colons, so the four fields always split
+	// cleanly on ':'.
+	parts := strings.Split(body, ":")
+	if len(parts) != 4 {
+		return fmt.Errorf("invalid message format: expected 4 colon-separated fields, found %d", len(parts))
 	}
 
-	ssver = matches[1]
-	spub = matches[2]
-	snonce = matches[3]
-	sbox = matches[4]
+	version, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return fmt.Errorf("invalid schema version %q: %v", parts[0], err)
+	}
+	if version != SchemaVersion {
+		return fmt.Errorf("%w: %d", ErrUnknownSchemaVersion, version)
+	}
+	b.SchemaVersion = version
 
-	b.SchemaVersion, err = strconv.Atoi(ssver)
+	pub, err := decodeField("public key", parts[1], 32)
 	if err != nil {
 		return err
 	}
+	copy(b.EncrypterPublic[:], pub)
 
-	pub, err := base64.StdEncoding.DecodeString(spub)
+	nonce, err := decodeField("nonce", parts[2], 24)
 	if err != nil {
 		return err
 	}
-	pubBytes := []byte(pub)
-	if len(pubBytes) != 32 {
-		return fmt.Errorf("public key invalid")
-	}
-	var public [32]byte
-	copy(public[:], pubBytes[0:32])
-	b.EncrypterPublic = public
+	copy(b.Nonce[:], nonce)
 
-	nnc, err := base64.StdEncoding.DecodeString(snonce)
+	box, err := base64.StdEncoding.DecodeString(parts[3])
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid base64 in box: %v", err)
 	}
-	nonceBytes := []byte(nnc)
-	if len(nonceBytes) != 24 {
-		return fmt.Errorf("nonce invalid")
+	if len(box) == 0 {
+		return fmt.Errorf("invalid box: empty")
 	}
-	var nonce [24]byte
-	copy(nonce[:], nonceBytes[0:24])
-	b.Nonce = nonce
-
-	box, err := base64.StdEncoding.DecodeString(sbox)
-	if err != nil {
-		return err
-	}
-	b.Box = []byte(box)
+	b.Box = box
 
 	return nil
+}
+
+// decodeField decodes a base64 field of the wire format, requiring the
+// decoded value to be exactly want bytes long.
+func decodeField(name, value string, want int) ([]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64 in %s: %v", name, err)
+	}
+	if len(decoded) != want {
+		return nil, fmt.Errorf("invalid %s: decoded to %d bytes, expected %d", name, len(decoded), want)
+	}
+	return decoded, nil
 }

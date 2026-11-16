@@ -33,6 +33,22 @@ func TestKeyExtraction(t *testing.T) {
 				_, err := ExtractPublicKey([]byte(in))
 				So(err, ShouldEqual, ErrPublicKeyMissing)
 			})
+
+			Convey("or if key is duplicated", func() {
+				in := "{\n" +
+					`"_public_key": "6d79b7e50073e5e66a4581ed08bf1d9a03806cc4648cffeb6df71b5775e5eb08",` + "\n" +
+					`"_public_key": "7d79b7e50073e5e66a4581ed08bf1d9a03806cc4648cffeb6df71b5775e5eb08"` + "\n" +
+					"}"
+				_, err := ExtractPublicKey([]byte(in))
+				So(err, ShouldWrap, ErrPublicKeyDuplicate)
+				So(err.Error(), ShouldContainSubstring, "line 3")
+			})
+
+			Convey("or if the document is truncated", func() {
+				in := `{"_public_key": "6d79b7e50073e5e66a4581ed08bf1d9a03806cc4648cffeb6df71b5775e5eb08"`
+				_, err := ExtractPublicKey([]byte(in))
+				So(err, ShouldNotBeNil)
+			})
 		})
 	})
 }

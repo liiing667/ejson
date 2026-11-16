@@ -117,7 +117,14 @@ func (e *Encrypter) encrypt(message []byte) (*boxedMessage, error) {
 // secure, it just doesn't allow for authorizing the encryptor. That's fine,
 // since authorization isn't a desired property of this particular cryptosystem.
 func (e *Encrypter) Encrypt(message []byte) ([]byte, error) {
-	if IsBoxedMessage(message) {
+	if LooksLikeBoxedMessage(message) {
+		// The value claims to be a boxed message. It must parse strictly;
+		// a malformed envelope (unknown schema version, truncated or
+		// invalid base64, ...) is an error, not plaintext to re-wrap.
+		var bm boxedMessage
+		if err := bm.Load(message); err != nil {
+			return nil, fmt.Errorf("refusing to encrypt malformed boxed message: %v", err)
+		}
 		return message, nil
 	}
 	boxedMessage, err := e.encrypt(message)
